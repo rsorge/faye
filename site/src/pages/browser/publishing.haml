@@ -32,3 +32,9 @@
       alert('There was a problem: ' + error.message);
     });</pre>
 
+    The Faye client will automatically try to resend your messages if it
+    encounters a network error. It will attempt to resend the message until it
+    receives confirmation that the server has processed it. Sometimes, you might
+    not want messages to be retried indefinitely, and Faye gives you two ways to
+    limit this behaviour; see the "dispatch options":/browser/dispatch.html.
+

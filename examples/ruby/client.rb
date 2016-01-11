@@ -10,15 +10,19 @@
 require 'rubygems'
 require 'bundler/setup'
 require 'faye'
+require 'permessage_deflate'
 
 port     = ARGV[0] || 9292
 path     = ARGV[1] || 'bayeux'
-scheme   = ARGV[2] == 'ssl' ? 'https' : 'http'
+scheme   = ARGV[2] == 'tls' ? 'https' : 'http'
 endpoint = "#{scheme}://localhost:#{port}/#{path}"
+proxy    = {:headers => {'User-Agent' => 'Faye'}}
 
 EM.run {
   puts "Connecting to #{endpoint}"
-  client = Faye::Client.new(endpoint)
+
+  client = Faye::Client.new(endpoint, :proxy => proxy)
+  client.add_websocket_extension(PermessageDeflate)
 
   subscription = client.subscribe '/chat/*' do |message|
     user = message['user']
@@ -49,4 +53,3 @@ EM.run {
     puts "[CONNECTION UP]"
   end
 }
-

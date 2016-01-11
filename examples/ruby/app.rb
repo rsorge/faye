@@ -1,5 +1,6 @@
 require 'sinatra'
 require 'faye'
+require 'permessage_deflate'
 
 ROOT_DIR = File.expand_path('../..', __FILE__)
 set :root, ROOT_DIR
@@ -22,18 +23,19 @@ App = Faye::RackAdapter.new(Sinatra::Application,
   :timeout => 25
 )
 
+App.add_websocket_extension(PermessageDeflate)
+
 def App.log(message)
 end
 
-App.bind(:subscribe) do |client_id, channel|
+App.on(:subscribe) do |client_id, channel|
   puts "[  SUBSCRIBE] #{client_id} -> #{channel}"
 end
 
-App.bind(:unsubscribe) do |client_id, channel|
+App.on(:unsubscribe) do |client_id, channel|
   puts "[UNSUBSCRIBE] #{client_id} -> #{channel}"
 end
 
-App.bind(:disconnect) do |client_id|
+App.on(:disconnect) do |client_id|
   puts "[ DISCONNECT] #{client_id}"
 end
-

@@ -1,5 +1,5 @@
 var Faye = {
-  VERSION:          '1.0.0',
+  VERSION:          '1.1.2',
 
   BAYEUX_VERSION:   '1.0',
   ID_LENGTH:        160,
@@ -23,7 +23,17 @@ var Faye = {
 
   random: function(bitlength) {
     bitlength = bitlength || this.ID_LENGTH;
-    return csprng(bitlength, 36);
+    var maxLength = Math.ceil(bitlength * Math.log(2) / Math.log(36));
+    var string = csprng(bitlength, 36);
+    while (string.length < maxLength) string = '0' + string;
+    return string;
+  },
+
+  validateOptions: function(options, validKeys) {
+    for (var key in options) {
+      if (this.indexOf(validKeys, key) < 0)
+        throw new Error('Unrecognized option: ' + key);
+    }
   },
 
   clientIdFromMessages: function(messages) {
@@ -134,4 +144,3 @@ if (typeof module !== 'undefined')
   module.exports = Faye;
 else if (typeof window !== 'undefined')
   window.Faye = Faye;
-

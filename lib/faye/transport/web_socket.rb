@@ -12,13 +12,21 @@ module Faye
 
     include Deferrable
 
-    def self.usable?(client, endpoint, &callback)
-      create(client, endpoint).usable?(&callback)
+    class Request
+      include Deferrable
+
+      def close
+        callback { |socket| socket.close }
+      end
     end
 
-    def self.create(client, endpoint)
-      sockets = client.transports[:websocket] ||= {}
-      sockets[endpoint.to_s] ||= new(client, endpoint)
+    def self.usable?(dispatcher, endpoint, &callback)
+      create(dispatcher, endpoint).usable?(&callback)
+    end
+
+    def self.create(dispatcher, endpoint)
+      sockets = dispatcher.transports[:websocket] ||= {}
+      sockets[endpoint.to_s] ||= new(dispatcher, endpoint)
     end
 
     def batching?
@@ -31,14 +39,20 @@ module Faye
       connect
     end
 
-    def request(envelopes)
+    def request(messages)
+      @pending ||= Set.new
+      messages.each { |message| @pending.add(message) }
+
+      promise = Request.new
+
       callback do |socket|
         next unless socket
-        envelopes.each { |envelope| @pending.add(envelope) }
-        messages = envelopes.map { |e| e.message }
         socket.send(Faye.to_json(messages))
+        promise.succeed(socket)
       end
+
       connect
+      promise
     end
 
     def connect
@@ -46,17 +60,20 @@ module Faye
       return unless @state == UNCONNECTED
       @state = CONNECTING
 
-      headers = @client.headers.dup
-      headers['Cookie'] = get_cookies
+      url        = @endpoint.dup
+      headers    = @dispatcher.headers.dup
+      extensions = @dispatcher.ws_extensions
+      cookie     = get_cookies
 
-      url = @endpoint.dup
       url.scheme = PROTOCOLS[url.scheme]
-      socket = Faye::WebSocket::Client.new(url.to_s, [], :headers => headers)
+      headers['Cookie'] = cookie unless cookie == ''
+
+      options = {:extensions => extensions, :headers => headers, :proxy => @proxy}
+      socket  = Faye::WebSocket::Client.new(url.to_s, [], options)
 
       socket.onopen = lambda do |*args|
         store_cookies(socket.headers['Set-Cookie'])
         @socket = socket
-        @pending = Set.new
         @state = CONNECTED
         @ever_connected = true
         ping
@@ -65,7 +82,7 @@ module Faye
 
       closed = false
       socket.onclose = socket.onerror = lambda do |*args|
-        return if closed
+        next if closed
         closed = true
 
         was_connected = (@state == CONNECTED)
@@ -89,19 +106,16 @@ module Faye
       end
 
       socket.onmessage = lambda do |event|
-        messages  = MultiJson.load(event.data)
-        envelopes = []
+        replies = MultiJson.load(event.data)
+        next if replies.nil?
+        replies = [replies].flatten
 
-        next if messages.nil?
-        messages = [messages].flatten
-
-        messages.each do |message|
-          next unless message.has_key?('successful')
-          next unless envelope = @pending.find { |e| e.id == message['id'] }
-          @pending.delete(envelope)
-          envelopes << envelope
+        replies.each do |reply|
+          next unless reply.has_key?('successful')
+          next unless message = @pending.find { |m| m['id'] == reply['id'] }
+          @pending.delete(message)
         end
-        receive(envelopes, messages)
+        receive(replies)
       end
     end
 
@@ -115,8 +129,7 @@ module Faye
     def ping
       return unless @socket
       @socket.send('[]')
-      timeout = @client.instance_eval { @advice['timeout'] }
-      add_timeout(:ping, timeout/2000.0) { ping }
+      add_timeout(:ping, @dispatcher.timeout / 2) { ping }
     end
   end
 

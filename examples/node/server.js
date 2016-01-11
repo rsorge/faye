@@ -1,18 +1,21 @@
-var fs    = require('fs'),
-    path  = require('path'),
-    http  = require('http'),
-    https = require('https'),
-    mime  = require('mime'),
-    faye  = require('../../build/node/faye-node');
+var fs      = require('fs'),
+    path    = require('path'),
+    http    = require('http'),
+    https   = require('https'),
+    mime    = require('mime'),
+    deflate = require('permessage-deflate'),
+    faye    = require('../../build/node/faye-node');
 
 var SHARED_DIR = __dirname + '/..',
     PUBLIC_DIR = SHARED_DIR + '/public',
 
     bayeux     = new faye.NodeAdapter({mount: '/bayeux', timeout: 20}),
     port       = process.argv[2] || '8000',
-    secure     = process.argv[3] === 'ssl',
+    secure     = process.argv[3] === 'tls',
     key        = fs.readFileSync(SHARED_DIR + '/server.key'),
     cert       = fs.readFileSync(SHARED_DIR + '/server.crt');
+
+bayeux.addWebsocketExtension(deflate);
 
 var handleRequest = function(request, response) {
   var path = (request.url === '/') ? '/index.html' : request.url;
@@ -37,17 +40,16 @@ bayeux.getClient().subscribe('/chat/*', function(message) {
   console.log('[' + message.user + ']: ' + message.message);
 });
 
-bayeux.bind('subscribe', function(clientId, channel) {
+bayeux.on('subscribe', function(clientId, channel) {
   console.log('[  SUBSCRIBE] ' + clientId + ' -> ' + channel);
 });
 
-bayeux.bind('unsubscribe', function(clientId, channel) {
+bayeux.on('unsubscribe', function(clientId, channel) {
   console.log('[UNSUBSCRIBE] ' + clientId + ' -> ' + channel);
 });
 
-bayeux.bind('disconnect', function(clientId) {
+bayeux.on('disconnect', function(clientId) {
   console.log('[ DISCONNECT] ' + clientId);
 });
 
 console.log('Listening on ' + port + (secure? ' (https)' : ''));
-

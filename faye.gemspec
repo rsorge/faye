@@ -1,6 +1,6 @@
 Gem::Specification.new do |s|
   s.name              = 'faye'
-  s.version           = '1.0.0'
+  s.version           = '1.1.2'
   s.summary           = 'Simple pub/sub messaging for the web'
   s.author            = 'James Coglan'
   s.email             = 'jcoglan@gmail.com'
@@ -16,26 +16,29 @@ Gem::Specification.new do |s|
   # You should generate them by running `npm run-script build` in the project
   # root.
   s.files = %w[CHANGELOG.md README.md] +
-            %w[lib/faye-browser.js lib/faye-browser-min.js lib/faye-browser-min.js.map] +
+            %w[.js -min.js -min.js.map].map { |ext| "lib/faye-browser#{ext}" } +
             Dir.glob('lib/**/*.rb')
   
   s.add_dependency 'cookiejar', '>= 0.3.0'
   s.add_dependency 'em-http-request', '>= 0.3.0'
   s.add_dependency 'eventmachine', '>= 0.12.0'
-  s.add_dependency 'faye-websocket', '>= 0.7.0'
+  s.add_dependency 'faye-websocket', '>= 0.9.1'
   s.add_dependency 'multi_json', '>= 1.0.0'
   s.add_dependency 'rack', '>= 1.0.0'
-  s.add_dependency 'websocket-driver', '>= 0.3.0'
+  s.add_dependency 'websocket-driver', '>= 0.5.1'
 
   s.add_development_dependency 'compass', '~> 0.11.0'
   s.add_development_dependency 'haml', '~> 3.1.0'
+  s.add_development_dependency 'permessage_deflate', '>= 0.1.0'
   s.add_development_dependency 'puma', '>= 2.0.0'
-  s.add_development_dependency 'rake'
-  s.add_development_dependency 'rspec'
   s.add_development_dependency 'rack-proxy', '~> 0.4.0'
   s.add_development_dependency 'rack-test'
+  s.add_development_dependency 'rake'
+  s.add_development_dependency 'rspec', '~> 2.99.0'
+  s.add_development_dependency 'rspec-eventmachine', '>= 0.2.0'
   s.add_development_dependency 'RedCloth', '~> 3.0.0'
   s.add_development_dependency 'sinatra'
+  s.add_development_dependency 'sass', '~> 3.2.0'
   s.add_development_dependency 'staticmatic'
 
   jruby = RUBY_PLATFORM =~ /java/
@@ -54,4 +57,3 @@ Gem::Specification.new do |s|
     s.add_development_dependency 'passenger', '>= 4.0.0'
   end
 end
-

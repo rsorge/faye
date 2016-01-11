@@ -13,8 +13,12 @@ Faye.Timeouts = {
     this._timeouts = this._timeouts || {};
     var timeout = this._timeouts[name];
     if (!timeout) return;
-    clearTimeout(timeout);
+    Faye.ENV.clearTimeout(timeout);
     delete this._timeouts[name];
+  },
+
+  removeAllTimeouts: function() {
+    this._timeouts = this._timeouts || {};
+    for (var name in this._timeouts) this.removeTimeout(name);
   }
 };
-

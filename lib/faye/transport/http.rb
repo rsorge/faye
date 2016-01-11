@@ -1,65 +1,78 @@
 module Faye
 
   class Transport::Http < Transport
-    def self.usable?(client, endpoint, &callback)
+    def self.usable?(dispatcher, endpoint, &callback)
       callback.call(URI === endpoint)
     end
 
-    def encode(envelopes)
-      Faye.to_json(envelopes.map { |e| e.message })
+    def encode(messages)
+      Faye.to_json(messages)
     end
 
-    def request(envelopes)
-      content = encode(envelopes)
-      params  = build_params(@endpoint, content)
+    def request(messages)
+      content = encode(messages)
+      params  = build_params(content)
       request = create_request(params)
 
       request.callback do
-        handle_response(request.response, envelopes)
+        handle_response(messages, request.response)
         store_cookies(request.response_header['SET_COOKIE'])
       end
 
       request.errback do
-        handle_error(envelopes)
+        handle_error(messages)
       end
+
+      request
     end
 
   private
 
-    def build_params(uri, content)
-      {
+    def build_params(content)
+      params = {
         :head => {
-          'Content-Length'  => content.bytesize,
-          'Content-Type'    => 'application/json',
-          'Cookie'          => get_cookies,
-          'Host'            => uri.host
-        }.merge(@client.headers),
+          'Content-Length' => content.bytesize,
+          'Content-Type'   => 'application/json',
+          'Host'           => @endpoint.host + (@endpoint.port ? ":#{@endpoint.port}" : '')
+        }.merge(@dispatcher.headers),
 
         :body    => content,
         :timeout => -1  # for em-http-request < 1.0
       }
+
+      cookie = get_cookies
+      params[:head]['Cookie'] = cookie unless cookie == ''
+
+      params
     end
 
     def create_request(params)
       version = EventMachine::HttpRequest::VERSION.split('.')[0].to_i
-      client  = if version >= 1
-                  options = {                 # for em-http-request >= 1.0
-                    :inactivity_timeout => 0  # connection inactivity (post-setup) timeout (0 = disable timeout)
-                  }
-                  EventMachine::HttpRequest.new(@endpoint.to_s, options)
-                else
-                  EventMachine::HttpRequest.new(@endpoint.to_s)
-                end
+      options = {:inactivity_timeout => 0}
+
+      if @proxy[:origin]
+        uri = URI.parse(@proxy[:origin])
+        options[:proxy] = {:host => uri.host, :port => uri.port}
+        if uri.user
+          options[:proxy][:authorization] = [uri.user, uri.password]
+        end
+      end
+
+      if version >= 1
+        client = EventMachine::HttpRequest.new(@endpoint.to_s, options)
+      else
+        client = EventMachine::HttpRequest.new(@endpoint.to_s)
+      end
 
       client.post(params)
     end
 
-    def handle_response(response, envelopes)
-      message = MultiJson.load(response) rescue nil
-      if message
-        receive(envelopes, message)
+    def handle_response(messages, response)
+      replies = MultiJson.load(response) rescue nil
+      if replies
+        receive(replies)
       else
-        handle_error(envelopes)
+        handle_error(messages)
       end
     end
   end

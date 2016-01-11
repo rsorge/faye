@@ -2,7 +2,8 @@
 
 root = File.expand_path('../../..', __FILE__)
 
-require root + '/vendor/em-rspec/lib/em-rspec'
+require 'rspec/em'
+
 require root + '/spec/ruby/encoding_helper'
 
 require root + '/lib/faye/mixins/deferrable'
@@ -14,7 +15,12 @@ require root + '/lib/faye/protocol/channel'
 require root + '/lib/faye/protocol/grammar'
 require root + '/lib/faye/engines/proxy'
 
-EngineSteps = EM::RSpec.async_steps do
+EngineSteps = RSpec::EM.async_steps do
+  def disconnect_engine(&resume)
+    engine.disconnect
+    resume.call
+  end
+
   def create_client(name, &resume)
     @inboxes ||= {}
     @clients ||= {}
@@ -87,7 +93,20 @@ EngineSteps = EM::RSpec.async_steps do
   end
 
   def clock_tick(time, &resume)
-    clock.tick(time)
+    EM.add_timer(time, &resume)
+  end
+
+  def expect_non_exclusive_event(name, event, args, engine, &resume)
+    params  = [@clients[name]] + args
+    handler = lambda { |*a| }
+
+    # we don't care if the event is called for other clients
+    filter = lambda do |*args|
+      handler.call(*args) if args[0] == params[0]
+    end
+
+    engine.bind(event, &filter)
+    handler.should_receive(:call).with(*params)
     resume.call
   end
 
@@ -157,6 +176,15 @@ shared_examples_for "faye engine" do
       engine.should_receive(:trigger).with(:handshake, match(/^[a-z0-9]+$/)).exactly(4)
       create_client :dave
     end
+
+    describe :gc do
+      let(:options) { {:timeout => 0.3, :gc => 0.2} }
+
+      it "doesn't prematurely remove a client after creation" do
+        clock_tick 0.25
+        check_client_exists :alice, true
+      end
+    end
   end
 
   describe :client_exists do
@@ -168,23 +196,25 @@ shared_examples_for "faye engine" do
       check_client_exists :anything, false
     end
   end
-=begin
+
   describe :ping do
+    let(:options) { {:timeout => 0.3, :gc => 0.08} }
+
     it "removes a client if it does not ping often enough" do
-      clock_tick 2
+      clock_tick 0.7
       check_client_exists :alice, false
     end
 
     it "prolongs the life of a client" do
-      clock_tick 1
+      clock_tick 0.45
       ping :alice
-      clock_tick 1
+      clock_tick 0.45
       check_client_exists :alice, true
-      clock_tick 1
+      clock_tick 0.45
       check_client_exists :alice, false
     end
   end
-=end
+
   describe :destroy_client do
     it "removes the given client" do
       destroy_client :alice
@@ -420,5 +450,15 @@ shared_examples_for "distributed engine" do
       expect_message :alice, [{"channel" => "/foo", "data" => "first"}, {"channel" => "/foo", "data" => "second"}]
     end
   end
-end
 
+  describe :gc do
+    let(:options) { {:timeout => 0.3, :gc => 0.08} }
+
+    it "calls close in each engine when a client is removed" do
+      expect_non_exclusive_event :alice, :close, [], left
+      expect_non_exclusive_event :alice, :close, [], right
+
+      clock_tick 0.7
+    end
+  end
+end

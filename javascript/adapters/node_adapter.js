@@ -8,20 +8,12 @@ var crypto = require('crypto'),
     url    = require('url'),
     querystring = require('querystring'),
 
-    csprng = require('csprng');
+    csprng = require('csprng'),
+    tunnel = require('tunnel-agent');
 
 Faye.WebSocket   = require('faye-websocket');
 Faye.EventSource = Faye.WebSocket.EventSource;
-Faye.CookieJar   = require('cookiejar').CookieJar;
-
-Faye.withDataFor = function(transport, callback, context) {
-  var data = '';
-  transport.setEncoding('utf8');
-  transport.on('data', function(chunk) { data += chunk });
-  transport.on('end', function() {
-    callback.call(context, data);
-  });
-};
+Faye.Cookies     = require('tough-cookie');
 
 Faye.NodeAdapter = Faye.Class({
   DEFAULT_ENDPOINT: '/bayeux',
@@ -31,8 +23,13 @@ Faye.NodeAdapter = Faye.Class({
   TYPE_SCRIPT:  {'Content-Type': 'text/javascript; charset=utf-8'},
   TYPE_TEXT:    {'Content-Type': 'text/plain; charset=utf-8'},
 
+  VALID_JSONP_CALLBACK: /^[a-z_\$][a-z0-9_\$]*(\.[a-z_\$][a-z0-9_\$]*)*$/i,
+
   initialize: function(options) {
-    this._options    = options || {};
+    this._options = options || {};
+    Faye.WebSocket.validateOptions(this._options, ['engine', 'mount', 'ping', 'timeout', 'extensions', 'websocketExtensions']);
+
+    this._extensions = [];
     this._endpoint   = this._options.mount || this.DEFAULT_ENDPOINT;
     this._endpointRe = new RegExp('^' + this._endpoint.replace(/\/$/, '') + '(/[^/]*)*(\\.[^\\.]+)?$');
     this._server     = new Faye.Server(this._options);
@@ -41,12 +38,21 @@ Faye.NodeAdapter = Faye.Class({
     this._static.map(path.basename(this._endpoint) + '.js', this.SCRIPT_PATH);
     this._static.map('client.js', this.SCRIPT_PATH);
 
-    var extensions = this._options.extensions;
-    if (!extensions) return;
+    var extensions = this._options.extensions,
+        websocketExtensions = this._options.websocketExtensions,
+        i, n;
 
-    extensions = [].concat(extensions);
-    for (var i = 0, n = extensions.length; i < n; i++)
-      this.addExtension(extensions[i]);
+    if (extensions) {
+      extensions = [].concat(extensions);
+      for (i = 0, n = extensions.length; i < n; i++)
+        this.addExtension(extensions[i]);
+    }
+
+    if (websocketExtensions) {
+      websocketExtensions = [].concat(websocketExtensions);
+      for (i = 0, n = websocketExtensions.length; i < n; i++)
+        this.addWebsocketExtension(websocketExtensions[i]);
+    }
   },
 
   listen: function() {
@@ -59,6 +65,14 @@ Faye.NodeAdapter = Faye.Class({
 
   removeExtension: function(extension) {
     return this._server.removeExtension(extension);
+  },
+
+  addWebsocketExtension: function(extension) {
+    this._extensions.push(extension);
+  },
+
+  close: function() {
+    return this._server.close();
   },
 
   getClient: function() {
@@ -92,7 +106,6 @@ Faye.NodeAdapter = Faye.Class({
   handle: function(request, response) {
     var requestUrl    = url.parse(request.url, true),
         requestMethod = request.method,
-        origin        = request.headers.origin,
         self          = this;
 
     request.originalUrl = request.url;
@@ -114,15 +127,15 @@ Faye.NodeAdapter = Faye.Class({
       return this._callWithParams(request, response, requestUrl.query);
 
     if (requestMethod === 'POST')
-      return Faye.withDataFor(request, function(data) {
+      return this._concatStream(request, function(data) {
         var type   = (request.headers['content-type'] || '').split(';')[0],
             params = (type === 'application/json')
                    ? {message: data}
                    : querystring.parse(data);
 
         request.body = data;
-        self._callWithParams(request, response, params);
-      });
+        this._callWithParams(request, response, params);
+      }, this);
 
     this._returnError(response, {message: 'Unrecognized request type'});
   },
@@ -141,12 +154,21 @@ Faye.NodeAdapter = Faye.Class({
           headers = Faye.extend({}, type),
           origin  = request.headers.origin;
 
+      if (!this.VALID_JSONP_CALLBACK.test(jsonp))
+        return this._returnError(response, {message: 'Invalid JSON-P callback: ' + jsonp});
+
       if (origin) headers['Access-Control-Allow-Origin'] = origin;
       headers['Cache-Control'] = 'no-cache, no-store';
+      headers['X-Content-Type-Options'] = 'nosniff';
 
       this._server.process(message, request, function(replies) {
         var body = Faye.toJSON(replies);
-        if (isGet) body = jsonp + '(' + this._jsonpEscape(body) + ');';
+
+        if (isGet) {
+          body = '/**/' + jsonp + '(' + this._jsonpEscape(body) + ');';
+          headers['Content-Disposition'] = 'attachment; filename=f.txt';
+        }
+
         headers['Content-Length'] = new Buffer(body, 'utf8').length.toString();
         headers['Connection'] = 'close';
 
@@ -164,7 +186,8 @@ Faye.NodeAdapter = Faye.Class({
   },
 
   handleUpgrade: function(request, socket, head) {
-    var ws       = new Faye.WebSocket(request, socket, head, null, {ping: this._options.ping}),
+    var options  = {extensions: this._extensions, ping: this._options.ping},
+        ws       = new Faye.WebSocket(request, socket, head, [], options),
         clientId = null,
         self     = this;
 
@@ -177,9 +200,9 @@ Faye.NodeAdapter = Faye.Class({
         var message = JSON.parse(event.data),
             cid     = Faye.clientIdFromMessages(message);
 
-        if (clientId && cid && cid !== clientId) self._server.closeSocket(clientId);
+        if (clientId && cid && cid !== clientId) self._server.closeSocket(clientId, false);
         self._server.openSocket(cid, ws, request);
-        clientId = cid;
+        if (cid) clientId = cid;
 
         self._server.process(message, request, function(replies) {
           if (ws) ws.send(Faye.toJSON(replies));
@@ -212,13 +235,35 @@ Faye.NodeAdapter = Faye.Class({
   _handleOptions: function(response) {
     var headers = {
       'Access-Control-Allow-Credentials': 'false',
-      'Access-Control-Allow-Headers':     'Accept, Content-Type, Pragma, X-Requested-With',
-      'Access-Control-Allow-Methods':     'POST, GET, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers':     'Accept, Authorization, Content-Type, Pragma, X-Requested-With',
+      'Access-Control-Allow-Methods':     'POST, GET',
       'Access-Control-Allow-Origin':      '*',
       'Access-Control-Max-Age':           '86400'
     };
+
     response.writeHead(200, headers);
     response.end('');
+  },
+
+  _concatStream: function(stream, callback, context) {
+    var chunks = [],
+        length = 0;
+
+    stream.on('data', function(chunk) {
+      chunks.push(chunk);
+      length += chunk.length;
+    });
+
+    stream.on('end', function() {
+      var buffer = new Buffer(length),
+          offset = 0;
+
+      for (var i = 0, n = chunks.length; i < n; i++) {
+        chunks[i].copy(buffer, offset);
+        offset += chunks[i].length;
+      }
+      callback.call(context, buffer.toString('utf8'));
+    });
   },
 
   _formatRequest: function(request) {
@@ -252,4 +297,3 @@ for (var method in Faye.Publisher) (function(method) {
 })(method);
 
 Faye.extend(Faye.NodeAdapter.prototype, Faye.Logging);
-

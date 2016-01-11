@@ -1,119 +1,137 @@
 Faye.Transport = Faye.extend(Faye.Class({
-  MAX_DELAY: 0,
+  DEFAULT_PORTS:    {'http:': 80, 'https:': 443, 'ws:': 80, 'wss:': 443},
+  SECURE_PROTOCOLS: ['https:', 'wss:'],
+  MAX_DELAY:        0,
+
   batching:  true,
 
-  initialize: function(client, endpoint) {
-    this._client  = client;
-    this.endpoint = endpoint;
-    this._outbox  = [];
+  initialize: function(dispatcher, endpoint) {
+    this._dispatcher = dispatcher;
+    this.endpoint    = endpoint;
+    this._outbox     = [];
+    this._proxy      = Faye.extend({}, this._dispatcher.proxy);
+
+    if (!this._proxy.origin && Faye.NodeAdapter) {
+      this._proxy.origin = Faye.indexOf(this.SECURE_PROTOCOLS, this.endpoint.protocol) >= 0
+                         ? (process.env.HTTPS_PROXY || process.env.https_proxy)
+                         : (process.env.HTTP_PROXY  || process.env.http_proxy);
+    }
   },
 
   close: function() {},
 
-  encode: function(envelopes) {
+  encode: function(messages) {
     return '';
   },
 
-  send: function(envelope) {
-    var message = envelope.message;
-
+  sendMessage: function(message) {
     this.debug('Client ? sending message to ?: ?',
-               this._client._clientId, Faye.URI.stringify(this.endpoint), message);
+               this._dispatcher.clientId, Faye.URI.stringify(this.endpoint), message);
 
-    if (!this.batching) return this.request([envelope]);
+    if (!this.batching) return Faye.Promise.fulfilled(this.request([message]));
 
-    this._outbox.push(envelope);
+    this._outbox.push(message);
+    this._promise = this._promise || new Faye.Promise();
+    this._flushLargeBatch();
 
-    if (message.channel === Faye.Channel.HANDSHAKE)
-      return this.addTimeout('publish', 0.01, this.flush, this);
+    if (message.channel === Faye.Channel.HANDSHAKE) {
+      this.addTimeout('publish', 0.01, this._flush, this);
+      return this._promise;
+    }
 
     if (message.channel === Faye.Channel.CONNECT)
       this._connectMessage = message;
 
-    this.flushLargeBatch();
-    this.addTimeout('publish', this.MAX_DELAY, this.flush, this);
+    this.addTimeout('publish', this.MAX_DELAY, this._flush, this);
+    return this._promise;
   },
 
-  flush: function() {
+  _flush: function() {
     this.removeTimeout('publish');
 
     if (this._outbox.length > 1 && this._connectMessage)
       this._connectMessage.advice = {timeout: 0};
 
-    this.request(this._outbox);
+    Faye.Promise.fulfill(this._promise, this.request(this._outbox));
+    delete this._promise;
 
     this._connectMessage = null;
     this._outbox = [];
   },
 
-  flushLargeBatch: function() {
+  _flushLargeBatch: function() {
     var string = this.encode(this._outbox);
-    if (string.length < this._client.maxRequestSize) return;
+    if (string.length < this._dispatcher.maxRequestSize) return;
     var last = this._outbox.pop();
-    this.flush();
+    this._flush();
     if (last) this._outbox.push(last);
   },
 
-  receive: function(envelopes, responses) {
-    var n = envelopes.length;
-    while (n--) envelopes[n].setDeferredStatus('succeeded');
+  _receive: function(replies) {
+    if (!replies) return;
+    replies = [].concat(replies);
 
-    responses = [].concat(responses);
+    this.debug('Client ? received from ? via ?: ?',
+               this._dispatcher.clientId, Faye.URI.stringify(this.endpoint), this.connectionType, replies);
 
-    this.debug('Client ? received from ?: ?',
-               this._client._clientId, Faye.URI.stringify(this.endpoint), responses);
-
-    for (var i = 0, n = responses.length; i < n; i++)
-      this._client.receiveMessage(responses[i]);
+    for (var i = 0, n = replies.length; i < n; i++)
+      this._dispatcher.handleResponse(replies[i]);
   },
 
-  handleError: function(envelopes, immediate) {
-    var n = envelopes.length;
-    while (n--) envelopes[n].setDeferredStatus('failed', immediate);
+  _handleError: function(messages, immediate) {
+    messages = [].concat(messages);
+
+    this.debug('Client ? failed to send to ? via ?: ?',
+               this._dispatcher.clientId, Faye.URI.stringify(this.endpoint), this.connectionType, messages);
+
+    for (var i = 0, n = messages.length; i < n; i++)
+      this._dispatcher.handleError(messages[i]);
   },
 
   _getCookies: function() {
-    var cookies = this._client.cookies;
+    var cookies = this._dispatcher.cookies,
+        url     = Faye.URI.stringify(this.endpoint);
+
     if (!cookies) return '';
 
-    return cookies.getCookies({
-      domain: this.endpoint.hostname,
-      path:   this.endpoint.path,
-      secure: this.endpoint.protocol === 'https:'
-    }).toValueString();
+    return Faye.map(cookies.getCookiesSync(url), function(cookie) {
+      return cookie.cookieString();
+    }).join('; ');
   },
 
   _storeCookies: function(setCookie) {
-    if (!setCookie || !this._client.cookies) return;
+    var cookies = this._dispatcher.cookies,
+        url     = Faye.URI.stringify(this.endpoint),
+        cookie;
+
+    if (!setCookie || !cookies) return;
     setCookie = [].concat(setCookie);
-    var cookie;
 
     for (var i = 0, n = setCookie.length; i < n; i++) {
-      cookie = this._client.cookies.setCookie(setCookie[i]);
-      cookie = cookie[0] || cookie;
-      cookie.domain = cookie.domain || this.endpoint.hostname;
+      cookie = Faye.Cookies.Cookie.parse(setCookie[i]);
+      cookies.setCookieSync(cookie, url);
     }
   }
 
 }), {
-  get: function(client, allowed, disabled, callback, context) {
-    var endpoint = client.endpoint;
+  get: function(dispatcher, allowed, disabled, callback, context) {
+    var endpoint = dispatcher.endpoint;
 
     Faye.asyncEach(this._transports, function(pair, resume) {
       var connType     = pair[0], klass = pair[1],
-          connEndpoint = client.endpoints[connType] || endpoint;
+          connEndpoint = dispatcher.endpointFor(connType);
 
       if (Faye.indexOf(disabled, connType) >= 0)
         return resume();
 
       if (Faye.indexOf(allowed, connType) < 0) {
-        klass.isUsable(client, connEndpoint, function() {});
+        klass.isUsable(dispatcher, connEndpoint, function() {});
         return resume();
       }
 
-      klass.isUsable(client, connEndpoint, function(isUsable) {
+      klass.isUsable(dispatcher, connEndpoint, function(isUsable) {
         if (!isUsable) return resume();
-        var transport = klass.hasOwnProperty('create') ? klass.create(client, connEndpoint) : new klass(client, connEndpoint);
+        var transport = klass.hasOwnProperty('create') ? klass.create(dispatcher, connEndpoint) : new klass(dispatcher, connEndpoint);
         callback.call(context, transport);
       });
     }, function() {
@@ -126,9 +144,12 @@ Faye.Transport = Faye.extend(Faye.Class({
     klass.prototype.connectionType = type;
   },
 
+  getConnectionTypes: function() {
+    return Faye.map(this._transports, function(t) { return t[0] });
+  },
+
   _transports: []
 });
 
 Faye.extend(Faye.Transport.prototype, Faye.Logging);
 Faye.extend(Faye.Transport.prototype, Faye.Timeouts);
-

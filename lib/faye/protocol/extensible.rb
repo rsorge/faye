@@ -18,7 +18,7 @@ module Faye
     end
 
     def pipe_through_extensions(stage, message, env, &callback)
-      debug 'Passing through ? extensions: ?', stage, message
+      debug('Passing through ? extensions: ?', stage, message)
 
       return callback.call(message) unless @extensions
       extensions = @extensions.dup
@@ -43,4 +43,3 @@ module Faye
 
   end
 end
-

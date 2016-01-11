@@ -75,7 +75,7 @@ module Faye
     end
 
     class Set
-      def initialize(parent = nil, value = nil)
+      def initialize
         @channels = {}
       end
 
@@ -92,10 +92,9 @@ module Faye
       end
 
       def subscribe(names, callback)
-        return unless callback
         names.each do |name|
           channel = @channels[name] ||= Channel.new(name)
-          channel.bind(:message, &callback)
+          channel.bind(:message, &callback) if callback
         end
       end
 
@@ -122,4 +121,3 @@ module Faye
 
   end
 end
-

@@ -13,7 +13,7 @@ FakeSocket.prototype.write = function(buffer, encoding) {
 }
 FakeSocket.prototype.read = function() {
   var output = []
-  this._fragments.forEach(function(buffer, i) {
+  this._fragments.forEach(function(buffer) {
     for (var j = 0, n = buffer[0].length; j < n; j++)
     output.push(buffer[0][j])
   })
@@ -41,7 +41,7 @@ JS.require( 'FayeSpec',
             'Server.IntegrationSpec',
             'NodeAdapterSpec',
             'ClientSpec',
-            'UriSpec',
+            'DispatcherSpec',
             'TransportSpec',
+            'UriSpec',
             function() { JS.Test.autorun() })
-

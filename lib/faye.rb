@@ -14,30 +14,31 @@ require 'time'
 require 'uri'
 
 module Faye
-  VERSION = '1.0.0'
+  VERSION = '1.1.2'
 
   ROOT = File.expand_path(File.dirname(__FILE__))
 
-  autoload :Publisher,    File.join(ROOT, 'faye', 'mixins', 'publisher')
   autoload :Deferrable,   File.join(ROOT, 'faye', 'mixins', 'deferrable')
-  autoload :Timeouts,     File.join(ROOT, 'faye', 'mixins', 'timeouts')
   autoload :Logging,      File.join(ROOT, 'faye', 'mixins', 'logging')
+  autoload :Publisher,    File.join(ROOT, 'faye', 'mixins', 'publisher')
+  autoload :Timeouts,     File.join(ROOT, 'faye', 'mixins', 'timeouts')
 
   autoload :Namespace,    File.join(ROOT, 'faye', 'util', 'namespace')
 
   autoload :Engine,       File.join(ROOT, 'faye', 'engines', 'proxy')
 
-  autoload :Grammar,      File.join(ROOT, 'faye', 'protocol', 'grammar')
-  autoload :Extensible,   File.join(ROOT, 'faye', 'protocol', 'extensible')
   autoload :Channel,      File.join(ROOT, 'faye', 'protocol', 'channel')
-  autoload :Envelope,     File.join(ROOT, 'faye', 'protocol', 'envelope')
-  autoload :Subscription, File.join(ROOT, 'faye', 'protocol', 'subscription')
-  autoload :Publication,  File.join(ROOT, 'faye', 'protocol', 'publication')
   autoload :Client,       File.join(ROOT, 'faye', 'protocol', 'client')
+  autoload :Dispatcher,   File.join(ROOT, 'faye', 'protocol', 'dispatcher')
+  autoload :Scheduler,    File.join(ROOT, 'faye', 'protocol', 'scheduler')
+  autoload :Extensible,   File.join(ROOT, 'faye', 'protocol', 'extensible')
+  autoload :Grammar,      File.join(ROOT, 'faye', 'protocol', 'grammar')
+  autoload :Publication,  File.join(ROOT, 'faye', 'protocol', 'publication')
   autoload :Server,       File.join(ROOT, 'faye', 'protocol', 'server')
+  autoload :Subscription, File.join(ROOT, 'faye', 'protocol', 'subscription')
 
-  autoload :Transport,    File.join(ROOT, 'faye', 'transport', 'transport')
   autoload :Error,        File.join(ROOT, 'faye', 'error')
+  autoload :Transport,    File.join(ROOT, 'faye', 'transport', 'transport')
 
   autoload :RackAdapter,  File.join(ROOT, 'faye', 'adapters', 'rack_adapter')
   autoload :StaticServer, File.join(ROOT, 'faye', 'adapters', 'static_server')
@@ -125,4 +126,3 @@ module Faye
     resume.call
   end
 end
-

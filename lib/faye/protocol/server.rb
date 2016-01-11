@@ -16,7 +16,11 @@ module Faye
       engine_opts[:timeout] = @options[:timeout]
       @engine     = Faye::Engine.get(engine_opts)
 
-      info 'Created new server: ?', @options
+      info('Created new server: ?', @options)
+    end
+
+    def close
+      @engine.close
     end
 
     def open_socket(client_id, socket, env)
@@ -24,14 +28,14 @@ module Faye
       @engine.open_socket(client_id, Socket.new(self, socket, env))
     end
 
-    def close_socket(client_id)
-      @engine.flush(client_id)
+    def close_socket(client_id, close = true)
+      @engine.flush_connection(client_id, close)
     end
 
     def process(messages, env, &callback)
       local    = env.nil?
       messages = [messages].flatten
-      info 'Processing messages: ? (local: ?)', messages, local
+      info('Processing messages: ? (local: ?)', messages, local)
 
       return callback.call([]) if messages.size == 0
       processed, responses = 0, []
@@ -40,7 +44,7 @@ module Faye
         responses.concat(replies)
         processed += 1
         responses.compact!
-        info 'Returning replies: ?', responses
+        info('Returning replies: ?', responses)
         callback.call(responses) if processed == messages.size
       end
 
@@ -49,7 +53,7 @@ module Faye
         gather_replies.call(replies) if expected == 0
 
         replies.each_with_index do |reply, i|
-          debug 'Processing reply: ?', reply
+          debug('Processing reply: ?', reply)
           pipe_through_extensions(:outgoing, reply, env) do |message|
             replies[i] = message
             extended  += 1
@@ -79,7 +83,7 @@ module Faye
 
     def handle(message, local = false, &callback)
       return callback.call([]) if !message
-      info 'Handling message: ? (local: ?)', message, local
+      info('Handling message: ? (local: ?)', message, local)
 
       channel_name = message['channel']
       error        = message['error']
@@ -90,7 +94,6 @@ module Faye
         error = Faye::Error.channel_invalid(channel_name)
       end
 
-      message.delete('clientId')
       @engine.publish(message) unless error
 
       response = make_response(message)
@@ -100,8 +103,7 @@ module Faye
     end
 
     def handle_meta(message, local, &callback)
-      method    = Channel.parse(message['channel'])[1]
-      client_id = message['clientId']
+      method = Channel.parse(message['channel'])[1]
 
       unless META_METHODS.include?(method)
         response = make_response(message)
@@ -287,4 +289,3 @@ module Faye
 
   end
 end
-

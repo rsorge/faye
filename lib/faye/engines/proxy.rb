@@ -21,7 +21,7 @@ module Faye
 
     def self.random(bitlength = ID_LENGTH)
       limit    = 2 ** bitlength
-      max_size = (limit - 1).to_s(36).size
+      max_size = (bitlength * Math.log(2) / Math.log(36)).ceil
       string   = SecureRandom.random_number(limit).to_s(36)
       string   = '0' + string while string.size < max_size
       string
@@ -48,14 +48,14 @@ module Faye
         @engine      = engine_class.create(self, @options)
 
         bind :close do |client_id|
-          EventMachine.next_tick { close_connection(client_id) }
+          EventMachine.next_tick { flush_connection(client_id) }
         end
 
-        debug 'Created new engine: ?', @options
+        debug('Created new engine: ?', @options)
       end
 
       def connect(client_id, options = {}, &callback)
-        debug 'Accepting connection from ?', client_id
+        debug('Accepting connection from ?', client_id)
         @engine.ping(client_id)
         conn = connection(client_id, true)
         conn.connect(options, &callback)
@@ -75,9 +75,8 @@ module Faye
       end
 
       def close_connection(client_id)
-        debug 'Closing connection for ?', client_id
-        conn = @connections[client_id]
-        return unless conn
+        debug('Closing connection for ?', client_id)
+        return unless conn = @connections[client_id]
         conn.socket.close if conn.socket
         trigger('connection:close', client_id)
         @connections.delete(client_id)
@@ -90,8 +89,7 @@ module Faye
 
       def deliver(client_id, messages)
         return if !messages || messages.empty?
-        conn = connection(client_id, false)
-        return false unless conn
+        return false unless conn = connection(client_id, false)
         messages.each(&conn.method(:deliver))
         true
       end
@@ -100,11 +98,18 @@ module Faye
         Engine.random
       end
 
-      def flush(client_id)
+      def flush_connection(client_id, close = true)
         return unless client_id
-        debug 'Flushing connection for ?', client_id
-        conn = connection(client_id, false)
-        conn.flush!(true) if conn
+        debug('Flushing connection for ?', client_id)
+        return unless conn = connection(client_id, false)
+        conn.socket = nil unless close
+        conn.flush
+        close_connection(client_id)
+      end
+
+      def close
+        @connections.keys.each { |client_id| flush_connection(client_id) }
+        @engine.disconnect
       end
 
       def disconnect
@@ -119,4 +124,3 @@ module Faye
 
   end
 end
-

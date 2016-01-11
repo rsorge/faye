@@ -5,13 +5,23 @@ module Faye
     include Publisher
     include Timeouts
 
+    DEFAULT_PORTS    = {'http' => 80, 'https' => 433, 'ws' => 80, 'wss' => 443}
+    SECURE_PROTOCOLS = ['https', 'wss']
+
     attr_reader :endpoint
 
-    def initialize(client, endpoint)
+    def initialize(dispatcher, endpoint)
       super()
-      @client   = client
-      @endpoint = endpoint
-      @outbox   = []
+      @dispatcher = dispatcher
+      @endpoint   = endpoint
+      @outbox     = []
+      @proxy      = @dispatcher.proxy.dup
+
+      scheme = @endpoint.respond_to?(:scheme) ? @endpoint.scheme : nil
+
+      @proxy[:origin] ||= SECURE_PROTOCOLS.include?(scheme) ?
+                          (ENV['HTTPS_PROXY'] || ENV['https_proxy']) :
+                          (ENV['HTTP_PROXY']  || ENV['http_proxy'])
     end
 
     def batching?
@@ -21,7 +31,7 @@ module Faye
     def close
     end
 
-    def encode(envelopes)
+    def encode(messages)
       ''
     end
 
@@ -29,26 +39,33 @@ module Faye
       self.class.connection_type
     end
 
-    def send(envelope)
-      message = envelope.message
-      client_id = @client.instance_eval { @client_id }
-      debug('Client ? sending message to ?: ?', client_id, @endpoint, message)
+    def send_message(message)
+      debug('Client ? sending message to ? via ?: ?', @dispatcher.client_id, @endpoint, connection_type, message)
 
-      return request([envelope]) unless batching?
+      unless batching?
+        promise = EventMachine::DefaultDeferrable.new
+        promise.succeed(request([message]))
+        return promise
+      end
 
-      @outbox << envelope
+      @outbox << message
+      @promise ||= EventMachine::DefaultDeferrable.new
+      flush_large_batch
 
       if message['channel'] == Channel::HANDSHAKE
-        return add_timeout(:publish, 0.01) { flush }
+        add_timeout(:publish, 0.01) { flush }
+        return @promise
       end
 
       if message['channel'] == Channel::CONNECT
         @connection_message = message
       end
 
-      flush_large_batch
       add_timeout(:publish, Engine::MAX_DELAY) { flush }
+      @promise
     end
+
+  private
 
     def flush
       remove_timeout(:publish)
@@ -57,7 +74,8 @@ module Faye
         @connection_message['advice'] = {'timeout' => 0}
       end
 
-      request(@outbox)
+      @promise.succeed(request(@outbox))
+      @promise = nil
 
       @connection_message = nil
       @outbox = []
@@ -65,35 +83,38 @@ module Faye
 
     def flush_large_batch
       string = encode(@outbox)
-      return if string.size < @client.max_request_size
+      return if string.size < @dispatcher.max_request_size
       last = @outbox.pop
       flush
       @outbox.push(last) if last
     end
 
-    def receive(envelopes, responses)
-      envelopes.each { |e| e.set_deferred_status(:succeeded) }
-      responses = [responses].flatten
-      client_id = @client.instance_eval { @client_id }
-      debug('Client ? received from ?: ?', client_id, @endpoint, responses)
-      responses.each { |response| @client.receive_message(response) }
+    def receive(replies)
+      return unless replies
+      replies = [replies].flatten
+
+      debug('Client ? received from ? via ?: ?', @dispatcher.client_id, @endpoint, connection_type, replies)
+
+      replies.each do |reply|
+        @dispatcher.handle_response(reply)
+      end
     end
 
-    def handle_error(envelopes, immediate = false)
-      envelopes.each { |e| e.set_deferred_status(:failed, immediate) }
-    end
+    def handle_error(messages, immediate = false)
+      debug('Client ? failed to send to ? via ?: ?', @dispatcher.client_id, @endpoint, connection_type, messages)
 
-  private
+      messages.each do |message|
+        @dispatcher.handle_error(message, immediate)
+      end
+    end
 
     def get_cookies
-      return @client.cookies
-      @client.cookies.get_cookies(@endpoint.to_s) * ';'
+      @dispatcher.cookies.get_cookies(@endpoint.to_s) * ';'
     end
 
     def store_cookies(set_cookie)
-      return @client.cookies
       [*set_cookie].compact.each do |cookie|
-        @client.cookies.set_cookie(@endpoint.to_s, cookie)
+        @dispatcher.cookies.set_cookie(@endpoint.to_s, cookie)
       end
     end
 
@@ -102,24 +123,24 @@ module Faye
     class << self
       attr_accessor :connection_type
 
-      def get(client, allowed, disabled, &callback)
-        endpoint = client.endpoint
+      def get(dispatcher, allowed, disabled, &callback)
+        endpoint = dispatcher.endpoint
 
         select = lambda do |(conn_type, klass), resume|
-          conn_endpoint = client.endpoints[conn_type] || endpoint
+          conn_endpoint = dispatcher.endpoint_for(conn_type)
 
           if disabled.include?(conn_type)
             next resume.call
           end
 
           unless allowed.include?(conn_type)
-            klass.usable?(client, conn_endpoint) { |u| }
+            klass.usable?(dispatcher, conn_endpoint) { |u| }
             next resume.call
           end
 
-          klass.usable?(client, conn_endpoint) do |is_usable|
+          klass.usable?(dispatcher, conn_endpoint) do |is_usable|
             next resume.call unless is_usable
-            transport = klass.respond_to?(:create) ? klass.create(client, conn_endpoint) : klass.new(client, conn_endpoint)
+            transport = klass.respond_to?(:create) ? klass.create(dispatcher, conn_endpoint) : klass.new(dispatcher, conn_endpoint)
             callback.call(transport)
           end
         end
@@ -135,6 +156,10 @@ module Faye
         @transports << [type, klass]
         klass.connection_type = type
       end
+
+      def connection_types
+        @transports.map { |t| t[0] }
+      end
     end
 
     %w[local web_socket http].each do |type|
@@ -143,4 +168,3 @@ module Faye
 
   end
 end
-

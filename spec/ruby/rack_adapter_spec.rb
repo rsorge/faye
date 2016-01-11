@@ -2,7 +2,7 @@ require "spec_helper"
 
 describe Faye::RackAdapter do
   include Rack::Test::Methods
-  let(:adapter) { Faye::RackAdapter.new(options) }
+  let(:adapter) { Faye::RackAdapter.new(options) { |ra| @yielded = ra } }
   let(:app)     { ServerProxy.new(adapter) }
   let(:options) { {:mount => "/bayeux", :timeout => 30} }
   let(:server)  { double "server" }
@@ -20,6 +20,12 @@ describe Faye::RackAdapter do
   before do
     Faye::Server.should_receive(:new).with(options).and_return server
     adapter.stub(:get_client).and_return double("client")
+  end
+
+  describe "monitoring configuration" do
+    it "should be possible by providing a block to initializer" do
+      @yielded.should be_instance_of(Faye::RackAdapter)
+    end
   end
 
   describe "POST requests" do
@@ -160,8 +166,8 @@ describe Faye::RackAdapter do
         get "/bayeux", params
         status.should == 200
         content_type.should == "text/javascript; charset=utf-8"
-        content_length.should == "42"
-        body.should == 'callback([{"channel":"/meta/handshake"}]);'
+        content_length.should == "46"
+        body.should == '/**/callback([{"channel":"/meta/handshake"}]);'
       end
 
       it "does not let the client cache the response" do
@@ -190,8 +196,8 @@ describe Faye::RackAdapter do
         get "/bayeux", params
         status.should == 200
         content_type.should == "text/javascript; charset=utf-8"
-        content_length.should == "47"
-        body.should == 'jsonpcallback([{"channel":"/meta/handshake"}]);'
+        content_length.should == "51"
+        body.should == '/**/jsonpcallback([{"channel":"/meta/handshake"}]);'
       end
     end
 
@@ -210,6 +216,11 @@ describe Faye::RackAdapter do
 
     describe "with malformed JSON" do
       before { params[:message] = "[}" }
+      it_should_behave_like "bad GET request"
+    end
+
+    describe "with a callback that's not a JS identifier" do
+      before { params[:jsonp] = "42" }
       it_should_behave_like "bad GET request"
     end
 

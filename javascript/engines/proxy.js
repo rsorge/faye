@@ -24,7 +24,7 @@ Faye.Engine.Proxy = Faye.Class({
 
     this.bind('close', function(clientId) {
       var self = this;
-      setTimeout(function() { self.closeConnection(clientId) }, 10);
+      Faye.Promise.defer(function() { self.flushConnection(clientId) });
     }, this);
 
     this.debug('Created new engine: ?', this._options);
@@ -80,11 +80,19 @@ Faye.Engine.Proxy = Faye.Class({
     return Faye.random();
   },
 
-  flush: function(clientId) {
+  flushConnection: function(clientId, close) {
     if (!clientId) return;
     this.debug('Flushing connection for ?', clientId);
     var conn = this.connection(clientId, false);
-    if (conn) conn.flush(true);
+    if (!conn) return;
+    if (close === false) conn.socket = null;
+    conn.flush();
+    this.closeConnection(clientId);
+  },
+
+  close: function() {
+    for (var clientId in this._connections) this.flushConnection(clientId);
+    this._engine.disconnect();
   },
 
   disconnect: function() {
@@ -101,7 +109,7 @@ Faye.Engine.METHODS.forEach(function(method) {
   Faye.Engine.Proxy.prototype[method] = function() {
     return this._engine[method].apply(this._engine, arguments);
   };
-})
+});
 
 Faye.extend(Faye.Engine.Proxy.prototype, Faye.Publisher);
 Faye.extend(Faye.Engine.Proxy.prototype, Faye.Logging);
